@@ -1,6 +1,6 @@
 # SD采样器实现——Euler Sampler
 
-![sampling](./img/sampling.png)
+![sampling](./imgs/sampling.png)
 
 ## 1. sampling concepts
 

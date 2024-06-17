@@ -6,7 +6,7 @@
 
 SDXL推理的输入为高斯随机噪声与文本描述、图片尺寸信等信息，输入经过加载了预训练权重的模型，以及循环T步的降噪算法，生成对应图片。
 
-![infer-process](./img/infer-pipeline.png)
+![infer-process](./imgs/infer-pipeline.png)
 
 如流程图所示，SDXL推理实现需要的重要元素及作用有：
 
