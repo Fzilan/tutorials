@@ -24,7 +24,7 @@
 - [x] [OpenSora-PKU 从零到一实现](./aigc/opensora-pku_from_scratch/opensora-pku%20implemented%20from%20scratch.md)
     - [ ] [VideoCausalVAE 简介与 MindSpore 实现]()
     - [ ] [T5-XXL 简介与 MindSpore 实现]()
-    - [ ] [Latte 简介与 MindSpore 实现]()
+    - [x] [Latte 简介与 MindSpore 实现](./aigc/opensora-pku_from_scratch/latteT2V%20implemented%20from%20scratch.md.md)
     - diffusion 过程
       - [ ] [diffusion 过程定义]()
       - [ ] [loss function 实现]()
