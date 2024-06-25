@@ -30,7 +30,7 @@
       - [ ] [loss function 实现]()
       - [ ] [DDPM 训练过程简介与 MindSpore 实现]()
     - 训练优化
-      - [ ] [vae tiling 实现]()
+      - [x] [vae tiling 实现](./aigc/opensora-pku_from_scratch/docs/vae%20tiling%20implement.md)
       - [ ] [text embedding cache 实现]()
     - 推理相关
       - [ ] [opensora-pku 推理流程介绍与MindSpore实现]()
