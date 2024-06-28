@@ -4,7 +4,7 @@
 
 ## 1. Latte 条件嵌入层简介
 
-opensora-pku 使用 的 LatteT2V 网络以 transformer 为骨干，涉及 timestep 嵌入、位置编码、图像分块嵌入等模块。嵌入层对时间、空间、序列位置等信息进行编码学习。参考下图中的 LatteT2V 网络结构，涉及embedding 计算的方法或模块有：
+opensora-pku 使用 的 LatteT2V 网络以 transformer 为骨干，涉及 timestep 嵌入、位置编码、图像分块嵌入等模块。嵌入层对时间、空间、序列位置等信息进行编码学习。参考[Latte 简介与 MindSpore 实现](./latte_implemented_from_scratch.md) 第 1 小节的 LatteT2V 网络结构，涉及embedding 计算的方法或模块有：
 
 * 位置编码函数（三角函数方法）
   * get_1d_sincos_pos_embed 
@@ -14,9 +14,6 @@ opensora-pku 使用 的 LatteT2V 网络以 transformer 为骨干，涉及 timest
   * PatchEmbed  - 图块嵌入层
   * CombinedTimestepSizeEmbeddings - 时间-尺寸联合嵌入层
   * CaptionProjection - 文本嵌入映射层
-
-![LatteT2V](./imgs/latteT2V.png)
-
 
 
 ## 2. Mindspore 代码实现

@@ -19,10 +19,17 @@ MindSpore 框架提供了 LayerNorm api, 可以直接通过 `nn.LayerNorm` 调�
 
 
 ```python
+import mindspore as ms
 from mindspore import nn
-nn.LayerNorm
-...
+
+input_tensor = ms.ops.randn(10, 20, 30)
+layer_norm = nn.LayerNorm(normalized_shape=(30,))
+output = layer_norm(input_tensor)
+print("Output shape:", output.shape)
 ```
+
+    Output shape: (10, 20, 30)
+
 
 mindSpore.nn.LayerNorm 与 torch.nn.LayerNorm 的主要差异为，后者有入参 `elementwise_affine`, 用于控制是否学习参数 $\gamma$ 与 $\beta$，前者没有该入参，但提供了 `gamma_init` 和`beta_init`入参以控制 $\gamma$ 与 $\beta$ 的初始化方法，详情可查看官网的[差异对比](https://www.mindspore.cn/docs/zh-CN/master/note/api_mapping/pytorch_diff/LayerNorm.html)文档。
 
