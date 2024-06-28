@@ -9,16 +9,14 @@ VAE 在扩散模型中作为原始图像/视频与隐空间之前的编码器和
 
 ### 1.1 Original VAE (3d)
 
-
-```python
-import mindspore as ms
-from mindspore import nn, ops, Tensor
-```
-
 以下是正常的 3d-VAE 的结构（仅作示例使用，不可运行），扩散过程开始前调用 `CausalVAEModel.encode` 把原始视频 `x` 编码到 latent space 得到 `z`， 扩散过程完成后调用 `CausalVAEModel.decode` 把隐空间变量 `z` 解码成视频 `x`：
 
 
 ```python
+import mindspore as ms
+from mindspore import nn, ops, Tensor
+
+# clone mindone repo, cd mindone
 from examples.opensora_pku.opensora.models.ae.videobase.causal_vae.modeling_causalvae import Encoder, Decoder
 from examples.opensora_pku.opensora.models.ae.videobase.modules.conv import CausalConv3d
 
@@ -118,13 +116,15 @@ tile_overlap_factor = 0.25
 
 我们先实现一个 2d 的 vae tiling，即固定帧数的视频从空间维度作 vae 分块编码。
 
+假设我们已经定义好 1.1 中的原始 3d vae `CausalVAEModel` ，我们取出其中的 `encoder`  与 `quant_conv`:
+
 
 ```python
 encoder = CausalVAEModel.encoder
 quant_conv = CausalVAEModel.quant_conv
 ```
 
-分别从横向、竖向按照一定的交叉比例分块，把每个分块单独编码。假设输入 2d vae tiling 的数据形状为 `(1, 3, 65, 512, 512)`, 我们可以把每一块分块的打印出来看一下：这里有9个分块，其中右边与下面的分块宽高不一定能达到 256 的尺寸。
+分别从横向、竖向按照一定的交叉比例分块，把每个分块单独编码。假设输入 2d vae tiling 的数据形状为 `(1, 3, 65, 512, 512)`, 我们可以把每一块分块的打印出来看一下：这里有 9 个分块，其中视频空间的右边与下面的分块，宽高不一定能达到 256 的尺寸。
 
 
 ```python
@@ -513,7 +513,7 @@ class CausalVAEModel(nn.Cell):
 
 ## 2. 显存对比分析
 
-(待实验) 我们可以使用 mindspore 的 profiler 分析对比 `use_tiling=Ture` 与 `use_tiling=Flase` 的显存。使用实例：
+我们可以使用 mindspore 的 profiler 分析对比 `use_tiling=Ture` 与 `use_tiling=Flase` 的显存，Profiler 接口使用可查询 Mindspore 官网教程。使用示例：
 
 
 ```python

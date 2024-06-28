@@ -1,4 +1,4 @@
-# Latte 简介与 MindSpore 实现
+# LatteT2V 简介与 MindSpore 实现
 
 本文介绍如何使用 Mindspore 在 Ascend 910* 上从零到一构建 OpenSora-PKU 中用到的 Latte 文生视频的噪声预测模型，主要代码参考自mindone套件[opensora-pku](https://github.com/mindspore-lab/mindone/tree/master/examples/opensora_pku/opensora/models/diffusion/latte)里的 Latte 实现。
 
