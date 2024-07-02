@@ -365,7 +365,6 @@ class LatteT2V(...):
 
 
 论文阅读：
-- DiT: https://arxiv.org/pdf/2212.09748
-- PixArt-Alpha: https://arxiv.org/pdf/2310.00426
+- DiT （AdaLN-Zero 在 3.2 小节）: https://arxiv.org/pdf/2212.09748
+- PixArt-Alpha（AdaLN-single 在 2.3 小节）: https://arxiv.org/pdf/2310.00426
 - Latte: https://arxiv.org/pdf/2401.03048
-
