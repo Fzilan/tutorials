@@ -45,7 +45,7 @@ OpenSora-PKU 的 latte 主要采用了上述第一种变体，空间、时间特
 
 与处理图像数据的 2d transformer block 不同，视频的 transformer block 两个 MHA 模块之前没有做 layernorm。
 
-备注：归一化层、注意力机制层的实现可参考 [自适应归一化层 MindSpore 实现](./latte_adalayernorm_implement.md), [注意力模块 MindSpore 实现]() （TODO）。 
+备注：归一化层、注意力机制层的实现讲解可分别参考 [自适应归一化层 MindSpore 实现](./latte_adalayernorm_implement.md), [Latte 多头注意力模块 MindSpore 实现](./latte_mha_implement.md)。 
 
 
 ```python

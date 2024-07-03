@@ -1,679 +1,89 @@
-# LatteT2V 简介与 MindSpore 实现
+# Latte 简介与 MindSpore 实现
 
 本文介绍如何使用 Mindspore 在 Ascend 910* 上从零到一构建 OpenSora-PKU 中用到的 Latte 文生视频的噪声预测模型，主要代码参考自mindone套件[opensora-pku](https://github.com/mindspore-lab/mindone/tree/master/examples/opensora_pku/opensora/models/diffusion/latte)里的 Latte 实现。
 
 ## 1. Latte T2V 结构简介
 
-[Latte: Latent Diffusion Transformer for Video Generation](https://arxiv.org/abs/2401.03048) 是以隐空间视频 transformer 为骨干的扩散模型，能有效地捕捉视频中的时空信息，扩展到文本到视频生成（T2V）任务后取得了一定效果。 原论文从分解输入视频的空间、时间维度的角度，提出 Latte 的4种变体，OpenSora-PKU 使用的 LatteT2V 主要参考了其中的时空交错式设计： Transformer 骨干由空间 transformer block 与时间 transformer block 交替进行。另外，Latte 使用了图像-视频联合训练进行学习， 可提升生成视频的质量。
+[Latte: Latent Diffusion Transformer for Video Generation](https://arxiv.org/abs/2401.03048) 是以隐空间视频 transformer 为骨干的扩散模型，能有效地捕捉视频中的时空信息，扩展到文本到视频生成（T2V）任务并取得一定效果。 原论文从分解输入视频的空间、时间维度的角度提出 Latte 的4种变体，OpenSora-PKU 使用的 LatteT2V 主要参考了其中的时空交错式设计： Transformer 骨干由空间 transformer block 与时间 transformer block 交替进行。另外，Latte 使用了图像-视频联合训练进行学习， 可提升生成视频的质量。
 
-LatteT2V 网络的整体代码结构如下，我们将逐一展开Mindspore实现:
-
-![LatteT2V](./imgs/latteT2V.png)
-
-## 2. Latte T2V Mindspore 代码实现
+LatteT2V 网络的整体代码结构如下，默认配置下归一化层使用 adaln-single 方法。
 
 
-```python
-import logging
-import numbers
-import os
-from typing import Any, Dict, Optional, Tuple
-import numpy as np
+<p align = "center">    
+<img src="./imgs/latteT2V_net.png" />
+</p>
+<p align="center">
+  <em> latteT2V net in open-sora pku</em>
+</p>
 
-import mindspore as ms
-from mindspore import Parameter, nn, ops
-from mindspore.common.initializer import initializer
+按照结构图，LatteT2V 的构建 Latte 使用的小模块可简单分为条件嵌入类、归一化层、注意力机制模块：
 
-from mindone.diffusers.configuration_utils import ConfigMixin, register_to_config
-from mindone.diffusers.models.modeling_utils import ModelMixin
+条件嵌入可参考 [Latte 条件嵌入层 MindSpore 实现](./latte_embedding_modules_implement.md):
 
-logger = logging.getLogger(__name__)
-```
-
-### 2.1 modules 搭建
-
-按照第 1 小节的结构图，首先构建 Latte 使用到的 modules 或者 与位置计算相关的函数。 可简单分为 `position utils`, `embeddings/conditions`, `normalization` 与 `attentions` 4类。
-
-* position utils - 三角函数位置编码
+* position utils - 三角函数位置编码函数
     * get_1d_sincos_pos_embed ✔️
     * get_2d_sincos_pos_embed ✔️
 
-* embeddings / conditions - 条件嵌入层
+* embeddings - 嵌入层
     * PatchEmbed ✔️
     * CombinedTimestepSizeEmbeddings ✔️
     * CaptionProjection ✔️
+
+归一化层可参考 [自适应归一化层 MindSpore 实现](./latte_adalayernorm_implement.md):
 
 * normalization - 归一化层
     * LayerNorm ✔️
     * AdaLayerNorm ✔️
 
+注意力机制可参考 [Latte 多头注意力模块的 MindSpore 实现](./latte_mha_implement.md):
 * attentions - 注意力机制
     * MultiHeadAttention  ✔️
     * FeedForward  ✔️
 
-#### 2.1.1 position utils - 位置编码函数
-
-定义相对位置编码函数，其中`mindone.diffusers` 中定义好的可直接复用。位置编码函数将参与图块嵌入 `PatchEmbed` 以及时间位置嵌入 `temp_pos_embed` 的计算。
+## 2. LatteT2V block 构建
 
 
-```python
-from mindone.diffusers.models.embeddings import get_1d_sincos_pos_embed_from_grid, get_2d_sincos_pos_embed
+OpenSora-PKU 的 latte 采用了论文中的第一种变体设计：空间、时间特征分别由单一的 transformer block 处理，空间 transformer block 与时间 transformer block 交替进行，组成一个 `LatteT2VBlock`。
 
-def get_1d_sincos_pos_embed(embed_dim, length, interpolation_scale=1.0, base_size=16):
-    pos = np.arange(0, length)[:, None] / interpolation_scale
-    pos_embed = get_1d_sincos_pos_embed_from_grid(embed_dim, pos)
-    return pos_embed
-```
+单个基本的 transformer block MindSpore 实现可参考[Latte BasicTransformerBlock MindSpore 实现](./latte_transformerblock_implement.md):
 
-#### 2.1.2 normalization - 归一化
+* 单个 Transformer Block：
+    * `BasicTransformerBlock` - 空间特征处理模块
+    * `BasicTransformerBlock_` - 时间特征处理模块
 
-* LayerNorm 
-
-    层归一化, 适用于层间信息交互。
-
-
-```python
-class LayerNorm(nn.Cell):
-    def __init__(self, normalized_shape, eps=1e-5, elementwise_affine: bool = True, dtype=ms.float32):
-        super().__init__()
-        if isinstance(normalized_shape, numbers.Integral):
-            normalized_shape = (normalized_shape,)
-        self.normalized_shape = tuple(normalized_shape)
-        self.eps = eps
-        self.elementwise_affine = elementwise_affine
-        if self.elementwise_affine:
-            self.gamma = Parameter(initializer("ones", normalized_shape, dtype=dtype))
-            self.beta = Parameter(initializer("zeros", normalized_shape, dtype=dtype))
-        else:
-            self.gamma = ops.ones(normalized_shape, dtype=dtype)
-            self.beta = ops.zeros(normalized_shape, dtype=dtype)
-        self.layer_norm = ops.LayerNorm(-1, -1, epsilon=eps)
-
-    def construct(self, x: ms.Tensor):
-        oridtype = x.dtype
-        x, _, _ = self.layer_norm(x.to(ms.float32), self.gamma.to(ms.float32), self.beta.to(ms.float32))
-        return x.to(oridtype)
-```
-
-* AdaLayerNormSingle
-
-    由 [PixArt-Alpha](https://arxiv.org/abs/2310.00426) 提出的节省参数量的方法，关键点为替代 DiT 的自适应标准化层（adaLN）中的占了27%参数量的线性投影层（MLP）。`AdaLayerNormSingle` 仅使用时间特征嵌入为输入，单独控制尺度和位移参数（scale and shift），在所有层共享。每一层又单独设置了可学习的特征嵌入，自适应调节不同层中的尺度和位移参数，可见后面 `BasicTransformerBlock_`, `BasicTransformerBlock`  中的 `self.scale_shift_table`。
-
-    备注: 时间特征嵌入层 `CombinedTimestepSizeEmbeddings` 的实现见 2.1.3 的嵌入模块构建。
-
-
-```python
-class AdaLayerNormSingle(nn.Cell):
-    r"""
-    Norm layer adaptive layer norm single (adaLN-single).
-
-    As proposed in PixArt-Alpha (see: https://arxiv.org/abs/2310.00426; Section 2.3).
-
-    Parameters:
-        embedding_dim (`int`): The size of each embedding vector.
-        use_additional_conditions (`bool`): To use additional conditions for normalization or not.
-    """
-
-    def __init__(self, embedding_dim: int, use_additional_conditions: bool = False):
-        super().__init__()
-
-        self.emb = CombinedTimestepSizeEmbeddings(
-            embedding_dim, size_emb_dim=embedding_dim // 3, use_additional_conditions=use_additional_conditions
-        )
-
-        self.silu = nn.SiLU()
-        self.linear = nn.Dense(embedding_dim, 6 * embedding_dim)
-
-    def construct(
-        self,
-        timestep: ms.Tensor,
-        added_cond_kwargs: Dict[str, ms.Tensor] = None,
-        batch_size: int = None,
-        hidden_dtype=None,
-    ) -> Tuple[ms.Tensor, ms.Tensor, ms.Tensor, ms.Tensor, ms.Tensor]:
-        # No modulation happening here.
-        embedded_timestep = self.emb(
-            timestep, batch_size=batch_size, hidden_dtype=hidden_dtype, resolution=None, aspect_ratio=None
-        )
-        return self.linear(self.silu(embedded_timestep)), embedded_timestep
-
-```
-
-#### 2.1.3 embeddings - 嵌入层
-
-
-```python
-from mindone.diffusers.models.embeddings import TimestepEmbedding, Timesteps
-```
-
-* PatchEmbed
-
-    将图像分块，使用卷积后再平铺（相对直接使用线性映射层可提升效率）；最后通过直接加上位置嵌入使得模型注入`patches` 在图像中的位置信息。
-
-
-```python
-class PatchEmbed(nn.Cell):
-    """2D Image to Patch Embedding"""
-
-    def __init__(
-        self,
-        height=224,
-        width=224,
-        patch_size=16,
-        in_channels=3,
-        embed_dim=768,
-        layer_norm=False,
-        flatten=True,
-        bias=True,
-        interpolation_scale=1,
-    ):
-        super().__init__()
-
-        num_patches = (height // patch_size) * (width // patch_size)
-        self.flatten = flatten
-        self.layer_norm = layer_norm
-
-        self.proj = nn.Conv2d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size, has_bias=bias)
-        if layer_norm:
-            self.norm = LayerNorm(embed_dim, elementwise_affine=False, eps=1e-6)
-        else:
-            self.norm = None
-
-        self.patch_size = patch_size
-        # See:
-        # https://github.com/PixArt-alpha/PixArt-alpha/blob/0f55e922376d8b797edd44d25d0e7464b260dcab/diffusion/model/nets/PixArtMS.py#L161
-        self.height, self.width = height // patch_size, width // patch_size
-        self.base_size = height // patch_size
-        self.interpolation_scale = interpolation_scale
-        pos_embed = get_2d_sincos_pos_embed(
-            embed_dim, int(num_patches**0.5), base_size=self.base_size, interpolation_scale=self.interpolation_scale
-        )
-        self.pos_embed = ms.Parameter(ms.Tensor(pos_embed).float().unsqueeze(0), requires_grad=False)
-
-    def construct(self, latent):
-        height, width = latent.shape[-2] // self.patch_size, latent.shape[-1] // self.patch_size
-
-        latent = self.proj(latent)
-        if self.flatten:
-            latent = latent.flatten(start_dim=2).permute(0, 2, 1)  # BCHW -> BNC
-        if self.layer_norm:
-            latent = self.norm(latent)
-
-        # Interpolate positional embeddings if needed.
-        # (For PixArt-Alpha: https://github.com/PixArt-alpha/PixArt-alpha/\
-        # blob/0f55e922376d8b797edd44d25d0e7464b260dcab/diffusion/model/nets/PixArtMS.py#L162C151-L162C160)
-        if self.height != height or self.width != width:
-            pos_embed = get_2d_sincos_pos_embed(
-                embed_dim=self.pos_embed.shape[-1],
-                grid_size=(height, width),
-                base_size=self.base_size,
-                interpolation_scale=self.interpolation_scale,
-            )
-            pos_embed = ms.Tensor(pos_embed)
-            pos_embed = pos_embed.float().unsqueeze(0)
-        else:
-            pos_embed = self.pos_embed
-
-        return (latent + pos_embed).to(latent.dtype)
-```
-
-* CombinedTimestepSizeEmbeddings
-
-    计算`AdaLayerNormSingle` 中使用的时间特征嵌入。
+LatteT2VBlock 的实现细节如下图所示。提取空间特征的 transformer block 输入同时有视频和文本的信息，空间 block 内做 self-attention 与 cross-attention ，其中文本与视觉的信息对齐通过模块里第二个交叉注意力机制实现。提取时间特征的 transformer block 对视频输入的时间特征进行学习，只做 self-attention 。 
     
-    其中， `use_additional_conditions` 设为 `True` 时，模块会同时结合分辨率、纵横比等图像或视频的尺寸信息计算条件嵌入，与时间戳 `timestep` 共同控制 transformer blocks 的尺度和位移参数。该模块的关于 size 的输入（ `resolution`, `aspect_ratio`, `batch_size`, `hidden_dtype` ）通过 `LatteT2V` 网络的 `added_cond_kwargs` 字典传过来。
+Latte 使用了图像-视频联合训练进行学习， 可提升生成视频的质量。 视频和图像生成的同时训练的实现方法是将同一数据集中随机独立采样视频帧，加到视频的末尾；`LatteT2VBlock` 的 `construct` 入参 `frame` 则表示连续视频的帧数， `use_image_num` 指的是在连续视频中采样的图片帧数，补在了视频的最后。为了不影响视频连续性的学习，与连续视频相关的内容才会被输入学习时间信息的 transformer block， 而采样图片的部分则排除在外，不参与时间模块学习。因此空间 block 的输出先做维度切分，分成 video 的部分与 image 的部分，video 的部分经过时间特征处理模块的学习后再与 image 部分拼接后输出。
+
+timesteps 信息在 LatteT2V net （而非 LatteT2V block）中做了维度处理，以适配空间 transformer 块与时间 transformer 块的维度输入。timesteps 输入的作用为：在 transformer 块内部通过自适应归一化方法实现扩散过程中的时间戳条件注入。
+
+<p align = "center">    
+<img src="./imgs/latteT2Vblockflow.png" width=80%/>
+</p>
+<p align="center">
+  <em> basic transformer blocks in one LatteT2V block</em>
+</p>
 
 
 ```python
-class CombinedTimestepSizeEmbeddings(nn.Cell):
-    """
-    For PixArt-Alpha.
+import logging
+from typing import Any, Dict, Optional
+import numpy as np
+import mindspore as ms
+from mindspore import nn, ops
+logger = logging.getLogger(__name__)
+
+# clone mindone, cd examples/opensora_pku
+from opensora.models.diffusion.latte.modules import (
+    AdaLayerNormSingle,
+    BasicTransformerBlock,
+    BasicTransformerBlock_,
+    CaptionProjection,
+    LatteT2VBlock,
+    LayerNorm,
+    PatchEmbed,
+)
 
-    Reference:
-    https://github.com/PixArt-alpha/PixArt-alpha/blob/0f55e922376d8b797edd44d25d0e7464b260dcab/diffusion/model/nets/PixArtMS.py#L164C9-L168C29
-    """
-
-    def __init__(self, embedding_dim, size_emb_dim, use_additional_conditions: bool = False):
-        super().__init__()
-
-        self.outdim = size_emb_dim
-        self.time_proj = Timesteps(num_channels=256, flip_sin_to_cos=True, downscale_freq_shift=0)
-        self.timestep_embedder = TimestepEmbedding(in_channels=256, time_embed_dim=embedding_dim)
-
-        self.use_additional_conditions = use_additional_conditions
-        if use_additional_conditions:
-            self.use_additional_conditions = True
-            self.additional_condition_proj = Timesteps(num_channels=256, flip_sin_to_cos=True, downscale_freq_shift=0)
-            self.resolution_embedder = TimestepEmbedding(in_channels=256, time_embed_dim=size_emb_dim)
-            self.aspect_ratio_embedder = TimestepEmbedding(in_channels=256, time_embed_dim=size_emb_dim)
-
-    def apply_condition(self, size: ms.Tensor, batch_size: int, embedder: nn.Cell):
-        if size.ndim == 1:
-            size = size[:, None]
-
-        if size.shape[0] != batch_size:
-            size = size.repeat_interleave(batch_size // size.shape[0], 1)
-            if size.shape[0] != batch_size:
-                raise ValueError(f"`batch_size` should be {size.shape[0]} but found {batch_size}.")
-
-        current_batch_size, dims = size.shape[0], size.shape[1]
-        size = size.reshape(-1)
-        size_freq = self.additional_condition_proj(size).to(size.dtype)
-
-        size_emb = embedder(size_freq)
-        size_emb = size_emb.reshape(current_batch_size, dims * self.outdim)
-        return size_emb
-
-    def construct(self, timestep, resolution, aspect_ratio, batch_size, hidden_dtype):
-        timesteps_proj = self.time_proj(timestep)
-        timesteps_emb = self.timestep_embedder(timesteps_proj.to(dtype=hidden_dtype))  # (N, D)
-
-        if self.use_additional_conditions:
-            resolution = self.apply_condition(resolution, batch_size=batch_size, embedder=self.resolution_embedder)
-            aspect_ratio = self.apply_condition(
-                aspect_ratio, batch_size=batch_size, embedder=self.aspect_ratio_embedder
-            )
-            conditioning = timesteps_emb + ops.cat([resolution, aspect_ratio], axis=1)
-        else:
-            conditioning = timesteps_emb
-
-        return conditioning
-```
-
-* CaptionProjection
-
-    输入 transformer blocks 前对文本嵌入做 projection。输入的 `caption` 已经是经过 T5 text encoder 的 embeddings，因此这里没有对文本tokens的dropout。
-
-
-```python
-class CaptionProjection(nn.Cell):
-    """
-    Projects caption embeddings.
-
-        """
-
-    def __init__(self, in_features, hidden_size, num_tokens=120):
-        super().__init__()
-        self.linear_1 = nn.Dense(in_features, hidden_size)
-        self.act_1 = nn.GELU(True)
-        self.linear_2 = nn.Dense(hidden_size, hidden_size)
-
-    def construct(self, caption, force_drop_ids=None):
-        hidden_states = self.linear_1(caption)
-        hidden_states = self.act_1(hidden_states)
-        hidden_states = self.linear_2(hidden_states)
-        return hidden_states
-```
-
-#### 2.1.4 Attentions - 注意力机制
-
-
-* MultiHeadAttention
-
-    `Attention`, `FlashAttention`, `MultiHeadAttention` 的实现细节可参考教程 [注意力机制的 MindSpore 实现]() （TODO）。这里我们先直接加载 mindone 套件里 opensora_pku 的 `MultiHeadAttention`。
-
-
-```python
-from examples.opensora_pku.opensora.models.diffusion.latte.modules import MultiHeadAttention
-```
-
-* FeedForward
-
-    `FeedForward` 一般作为 transformer block 最后的组件： `MultiHeadAttention` 的输出，最后过一下 非线性激活层 + dropout + 线性变换层 + final dropout (optional)， 可深化特征提取与加速收敛。激活层可复用 `mindone.diffusers` 组件。
-
-
-```python
-from mindone.diffusers.models.activations import GEGLU, GELU, ApproximateGELU
-class FeedForward(nn.Cell):
-    r"""
-    A feed-forward layer.
-    
-    """
-
-    def __init__(
-        self,
-        dim: int,
-        dim_out: Optional[int] = None,
-        mult: int = 4,
-        dropout: float = 0.0,
-        activation_fn: str = "geglu",
-        final_dropout: bool = False,
-    ):
-        super().__init__()
-        inner_dim = int(dim * mult)
-        dim_out = dim_out if dim_out is not None else dim
-        linear_cls = nn.Dense
-
-        if activation_fn == "gelu":
-            act_fn = GELU(dim, inner_dim)
-        if activation_fn == "gelu-approximate":
-            act_fn = GELU(dim, inner_dim, approximate="tanh")
-        elif activation_fn == "geglu":
-            act_fn = GEGLU(dim, inner_dim)
-        elif activation_fn == "geglu-approximate":
-            act_fn = ApproximateGELU(dim, inner_dim)
-
-        self.net = nn.CellList([])
-        # project in
-        self.net.append(act_fn)
-        # project dropout
-        self.net.append(nn.Dropout(p=dropout))
-        # project out
-        self.net.append(linear_cls(inner_dim, dim_out))
-        # FF as used in Vision Transformer, MLP-Mixer, etc. have a final dropout
-        if final_dropout:
-            self.net.append(nn.Dropout(p=dropout))
-
-    def construct(self, hidden_states: ms.Tensor, scale: float = 1.0) -> ms.Tensor:
-        compatible_cls = GEGLU
-        for module in self.net:
-            if isinstance(module, compatible_cls):
-                hidden_states = module(hidden_states, scale)
-            else:
-                hidden_states = module(hidden_states)
-        return hidden_states
-```
-
-### 2.2 LatteT2VBlock 搭建
-
-有了 `norm`, `MultiHeadAttention` 与  `FeedForward` 模块，我们已经可以构建 transformer blocks 。OpenSora-PKU 的 LatteT2V 空间 transformer block 与时间 transformer block 交替进行，组成一个 `LatteT2VBlock`。 
-
-
-* TransformerBlocks
-    * `BasicTransformerBlock` - 空间
-    * `BasicTransformerBlock_` - 时间
-
-* `LatteT2VBlock`
-
-下图展示了 mindone 仓中 OpenSora-PKU  `LatteT2VBlock` 默认配置下的结构：
-
-![LatteT2VBlock](./imgs/latteT2Vblock.png)
-
-备注：TransformerBlocks 中的归一化层除了 `ada_norm_single` 还可以使用其他归一化配置，如 `layer_norm`, `ada_norm`, `ada_norm_zero`, `ada_norm_single`, mindone 仓完整版实现通过`norm_type` 参数控制，对应 block 内的计算也会有所调整。mindone 仓的 TransformerBlocks 还支持 [GLIGEN: Open-Set Grounded Text-to-Image Generation](https://arxiv.org/abs/2301.07093)方法, 通过 TransformerBlocks 初始化参数 `attention_type = gated` 打开，并在`construct` 的入参： `cross_attention_kwargs` 字典里的`gligen_kwargs["objs"]` 传递定位指令（生成图片/视频的附加信息），使得 GLIGEN Control 生效。
-
-本教程只展示 OpenSora-PKU 默认配置默认配置中的实现，且对代码做了提炼简化。
-
-* BasicTransformerBlock (spatial_block)
-
-    空间 block : Norm + MultiHeadAttention  + MultiHeadAttention + Norm + FeedFoward，其中第一个 MHA 为 self-attention，第二个 MHA 为 cross-attention，文本的 hidden_states 也参与计算。`construct` 的输入 `timestep` 在使用 `ada_norm_single`计算 modulation 的 shift 和 scale 参数时使用。
-
-```python
-class BasicTransformerBlock(nn.Cell):
-    r"""
-    A basic Transformer block. for spatial_block
-    """
-
-    def __init__(
-        self,
-        dim: int,
-        num_attention_heads: int,
-        attention_head_dim: int,
-        dropout=0.0,
-        cross_attention_dim: Optional[int] = None,
-        activation_fn: str = "geglu",
-        attention_bias: bool = False,
-        only_cross_attention: bool = False,
-        double_self_attention: bool = False,
-        upcast_attention: bool = False,
-        norm_elementwise_affine: bool = True,
-        norm_type: str = "ada_norm_single",  # 'ada_norm', 'ada_norm_zero', 'ada_norm_single'
-        norm_eps: float = 1e-5,
-        final_dropout: bool = False,
-        attention_type: str = "default", #  "default", "gated", "gated-text-image"
-        enable_flash_attention: bool = False,
-    ):
-        super().__init__()
-        self.only_cross_attention = only_cross_attention
-
-        self.use_ada_layer_norm_single = norm_type == "ada_norm_single"
-        assert self.use_ada_layer_norm_single, "NotImplementedError: please refer to the mindone OpenSora-PKU repo"
-
-        self.norm1_ln = LayerNorm(dim, elementwise_affine=norm_elementwise_affine, eps=norm_eps)
-
-        # 1. Self-Attn
-        self.attn1 = MultiHeadAttention(
-            query_dim=dim,
-            heads=num_attention_heads,
-            dim_head=attention_head_dim,
-            dropout=dropout,
-            bias=attention_bias,
-            cross_attention_dim=cross_attention_dim if only_cross_attention else None,
-            upcast_attention=upcast_attention,
-            enable_flash_attention=enable_flash_attention,
-        )
-
-        # 2. Cross-Attn
-        if cross_attention_dim is not None or double_self_attention:
-            self.norm2_ln = LayerNorm(dim, elementwise_affine=norm_elementwise_affine, eps=norm_eps)
-            self.attn2 = MultiHeadAttention(
-                query_dim=dim,
-                cross_attention_dim=cross_attention_dim if not double_self_attention else None,
-                heads=num_attention_heads,
-                dim_head=attention_head_dim,
-                dropout=dropout,
-                bias=attention_bias,
-                upcast_attention=upcast_attention,
-                enable_flash_attention=enable_flash_attention,
-            )  # is self-attn if encoder_hidden_states is none
-        else:
-            self.norm2 = None
-            self.attn2 = None
-
-        # 3. Feed-forward
-        self.norm3 = LayerNorm(dim, elementwise_affine=norm_elementwise_affine, eps=norm_eps)
-        self.ff = FeedForward(
-            dim,
-            dropout=dropout,
-            activation_fn=activation_fn,
-            final_dropout=final_dropout,
-        )
-
-        # Scale-shift for PixArt-Alpha.
-        if self.use_ada_layer_norm_single:
-            self.scale_shift_table = ms.Parameter(ops.randn(6, dim) / dim**0.5)
-
-        # let chunk size default to None
-        self._chunk_size = None
-        self._chunk_dim = 0
-
-    def construct(
-        self,
-        hidden_states: ms.Tensor,
-        attention_mask: Optional[ms.Tensor] = None,
-        encoder_hidden_states: Optional[ms.Tensor] = None,
-        encoder_attention_mask: Optional[ms.Tensor] = None,
-        timestep: Optional[ms.Tensor] = None, 
-        cross_attention_kwargs: Dict[str, Any] = None,
-        class_labels: Optional[ms.Tensor] = None,
-    ) -> ms.Tensor:
-        
-        # 1. Retrieve lora scale.
-        lora_scale = cross_attention_kwargs.get("scale", 1.0) if cross_attention_kwargs is not None else 1.0
-        
-        # Notice that normalization is always applied before the real computation in the following blocks.
-        batch_size = hidden_states.shape[0]
-        gate_msa, shift_mlp, scale_mlp, gate_mlp = None, None, None, None
-
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
-            self.scale_shift_table[None] + timestep.reshape(batch_size, 6, -1)
-        ).chunk(6, axis=1)
-        norm_hidden_states = self.norm1_ln(hidden_states)
-        norm_hidden_states = norm_hidden_states * (1 + scale_msa) + shift_msa
-            
-        # 2. self-Attention
-        attn_output = self.attn1(
-            norm_hidden_states,
-            encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
-            attention_mask=attention_mask,
-            **cross_attention_kwargs,
-        )
-        
-        attn_output = gate_msa * attn_output
-        hidden_states = attn_output + hidden_states
-        if hidden_states.ndim == 4:
-            hidden_states = hidden_states.squeeze(1)
-
-        # 3. Cross-Attention
-        if self.attn2 is not None:
-
-            # norm_hidden_states = self.norm2_ln(hidden_states)
-            # use_ada_layer_norm_single, for PixArt norm2 isn't applied here
-            norm_hidden_states = hidden_states
-
-            attn_output = self.attn2(
-                norm_hidden_states,
-                encoder_hidden_states=encoder_hidden_states,
-                attention_mask=encoder_attention_mask,
-                **cross_attention_kwargs,
-            )
-            hidden_states = attn_output + hidden_states
-
-        # 4. Feed-forward
-        # use_ada_layer_norm_single
-        norm_hidden_states = self.norm2_ln(hidden_states)
-        norm_hidden_states = norm_hidden_states * (1 + scale_mlp) + shift_mlp
-
-        ff_output = self.ff(norm_hidden_states, scale=lora_scale)
-
-        # use_ada_layer_norm_single
-        ff_output = gate_mlp * ff_output
-
-        hidden_states = ff_output + hidden_states
-        if hidden_states.ndim == 4:
-            hidden_states = hidden_states.squeeze(1)
-
-        return hidden_states
-```
-
-* BasicTransformerBlock_ (temporal_block)
-
-    时间 transformer block : Norm + MultiHeadAttention + Norm + FeedFoward。 相比空间 transformer block 少了第二个 MHA， 只用了 self-attention 。
-
-
-```python
-class BasicTransformerBlock_(nn.Cell):
-    r"""
-    A basic Transformer block. for temporal_block
-
-    """
-
-    def __init__(
-        self,
-        dim: int,
-        num_attention_heads: int,
-        attention_head_dim: int,
-        dropout=0.0,
-        cross_attention_dim: Optional[int] = None,
-        activation_fn: str = "geglu",
-        attention_bias: bool = False,
-        only_cross_attention: bool = False,
-        double_self_attention: bool = False,
-        upcast_attention: bool = False,
-        norm_elementwise_affine: bool = True,
-        norm_type: str = "ada_norm_single",  # 'layer_norm', 'ada_norm', 'ada_norm_zero', 'ada_norm_single'
-        norm_eps: float = 1e-5,
-        final_dropout: bool = False,
-        attention_type: str = "default", #  "default", "gated", "gated-text-image"
-        enable_flash_attention: bool = False,
-    ):
-        super().__init__()
-        self.only_cross_attention = only_cross_attention
-
-        self.use_ada_layer_norm_single = norm_type == "ada_norm_single"
-        assert self.use_ada_layer_norm_single, "NotImplementedError: please refer to the mindone OpenSora-PKU repo"
-        self.norm1_ln = LayerNorm(dim, elementwise_affine=norm_elementwise_affine, eps=norm_eps)
-
-        self.attn1 = MultiHeadAttention(
-            query_dim=dim,
-            heads=num_attention_heads,
-            dim_head=attention_head_dim,
-            dropout=dropout,
-            bias=attention_bias,
-            cross_attention_dim=cross_attention_dim if only_cross_attention else None,
-            upcast_attention=upcast_attention,
-            enable_flash_attention=enable_flash_attention,
-        )
-
-        self.norm3 = LayerNorm(dim, elementwise_affine=norm_elementwise_affine, eps=norm_eps)
-
-        self.ff = FeedForward(dim, dropout=dropout, activation_fn=activation_fn, final_dropout=final_dropout)
-
-        # Scale-shift for PixArt-Alpha.
-        if self.use_ada_layer_norm_single:
-            self.scale_shift_table = ms.Parameter(ops.randn(6, dim) / dim**0.5)
-            
-        # let chunk size default to None
-        self._chunk_size = None
-        self._chunk_dim = 0
-
-    def construct(
-        self,
-        hidden_states: ms.Tensor,
-        attention_mask: Optional[ms.Tensor] = None,
-        encoder_hidden_states: Optional[ms.Tensor] = None,
-        encoder_attention_mask: Optional[ms.Tensor] = None,
-        timestep: Optional[ms.Tensor] = None,
-        cross_attention_kwargs: Dict[str, Any] = None,
-        class_labels: Optional[ms.Tensor] = None,
-    ) -> ms.Tensor:
-
-        # 1. Retrieve lora scale.
-        lora_scale = cross_attention_kwargs.get("scale", 1.0) if cross_attention_kwargs is not None else 1.0
-
-        # Notice that normalization is always applied before the real computation in the following blocks.
-        batch_size = hidden_states.shape[0]
-        gate_msa, shift_mlp, scale_mlp, gate_mlp = None, None, None, None
-
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
-            self.scale_shift_table[None] + timestep.reshape(batch_size, 6, -1)
-        ).chunk(6, axis=1)
-        norm_hidden_states = self.norm1_ln(hidden_states)
-        norm_hidden_states = norm_hidden_states * (1 + scale_msa) + shift_msa
-
-        # 2. Self-Attention
-        norm_hidden_states = self.norm1_ln(hidden_states)
-        attn_output = self.attn1(
-            norm_hidden_states,
-            encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
-            attention_mask=attention_mask,
-            **cross_attention_kwargs,
-        )
-        attn_output = gate_msa * attn_output
-
-        hidden_states = attn_output + hidden_states
-        if hidden_states.ndim == 4:
-            hidden_states = hidden_states.squeeze(1)
-
-        # 3. Feed-forward
-        #use_ada_layer_norm_single:
-        norm_hidden_states = self.norm3(hidden_states)
-        norm_hidden_states = norm_hidden_states * (1 + scale_mlp) + shift_mlp
-
-        ff_output = self.ff(norm_hidden_states, scale=lora_scale)
-
-        #use_ada_layer_norm_single:
-        ff_output = gate_mlp * ff_output
-
-        hidden_states = ff_output + hidden_states
-        if hidden_states.ndim == 4:
-            hidden_states = hidden_states.squeeze(1)
-
-        return hidden_states
-
-```
-
-* LatteT2VBlock
-  
-    LatteT2VBlock 的流程图细节如下。提取空间特征的 transformer block 需要做 self-attention 与 cross-attention, 因此输入同时有视频和文本的信息。提取时间特征的  transformer block 对视频的时间特征进行学习，只做 self-attention 。 
-    
-    Latte 使用了图像-视频联合训练进行学习， 可提升生成视频的质量。 视频和图像生成的同时训练的实现方法是将同一数据集中随机独立采样视频帧，加到视频的末尾；`LatteT2VBlock` 的 `construct` 入参 `frame` 则表示连续视频的帧数， `use_image_num` 指的是在连续视频中采样的图片帧数，补在了视频的最后。为了不影响视频连续性的学习，与连续视频相关的内容才会被输入学习时间信息的 transformer block， 而采样图片的部分则排除在外，不参与时间模块学习。
-
-    备注：下图最右边的 timestep 信息，在 transformer block 中使用 'ada_norm_zero' 或 'ada_norm_single' 时注入学习，用于计算 shfit and scale 参数。
-
-    ![LatteT2VBlock flow](./imgs/latteT2Vblockflow.png)
-
-
-```python
 class LatteT2VBlock(nn.Cell):
     def __init__(self, block_id, temp_pos_embed, spatial_block, temp_block):
         super().__init__()
@@ -757,11 +167,14 @@ class LatteT2VBlock(nn.Cell):
         return hidden_states
 ```
 
-### 2.3 LatteT2V 网络搭建
+## 3. LatteT2V 网络搭建
 
-现在我们已经可以按照第 1 小结的结构图，构建 LatteT2V 网络。
+现在我们已经可以按照第 1 小结的结构图，构建 LatteT2V 网络。在网络的初始化函数中，主要的定义步骤为：
+1，计算网络输入的嵌入层，包含视频空间嵌入、时间嵌入、文本嵌入映射层
+2. 定义空间、时间transformer 块，交错组合成单个Latte T2V 块，并按照输入的层数搭建整个网络
+3. 定义输出层，包括输出的线性映射、ada_norm_single 方法的增益与偏置计算的参数。
 
-输入：
+模型前向计算输入：
 
 - `hidden_states` : 经过 vae 编码的 latents， 形状为 (batch size, frame, input_channel, height, width)
 - `encoder_hidden_states`: text encoder 的文本嵌入，作为 transformer blocks 的 cross-attention 的输入之一，在空间特征学习模块的第二个注意力机制模块使用；
@@ -769,7 +182,7 @@ class LatteT2VBlock(nn.Cell):
 - `encoder_attention_mask`： 应用于 `encoder_hidden_states` 的掩码。  *optional*
 - `timestep` : 扩散过程的时间戳，如果使用自适应归一化层如`AdaLayerNorm`， `AdaLayerNormSingle` ，将作为其信息注入。 *optional*
 - `class_labels` : 使用类别条件引导生产时有。如果使用 `AdaLayerZeroNorm`， 将作为其信息注入。 *optional*
-- `added_cond_kwargs` : 参考 `CombinedTimestepSizeEmbeddings` 构建小节， timesteps 以外的 size 信息，通过这个参数字典传入。*optional*
+- `added_cond_kwargs` : 参考嵌入层实现的 `CombinedTimestepSizeEmbeddings` 构建小节， timesteps 以外的 size 信息，通过这个参数字典传入。*optional*
 - `cross_attention_kwargs` : 传入 transformer blocks - cross-attention 的参数字典。*optional*
 - `use_image_num`: 指 Latte 视频-图像混合训练时，从视频采样出图像的数量。
 
@@ -777,7 +190,12 @@ class LatteT2VBlock(nn.Cell):
 
 - `outout` : 形状为  (batch size, frame, output_channel, height, width), 其中 output_channel = input_channel * 2, 表示 Latte 学习/预测的 noise 与 variance。
 
+
+
 ```python
+from mindone.diffusers.configuration_utils import ConfigMixin, register_to_config
+from mindone.diffusers.models.modeling_utils import ModelMixin
+
 class LatteT2V(ModelMixin, ConfigMixin):
     _supports_gradient_checkpointing = True
 
@@ -1075,7 +493,7 @@ def LatteT2V_XL_122(**kwargs):
     )
 ```
 
-初始化一个 Latte model 并打印结构：
+我们可以初始化一个 Latte model 并打印网络结构：
 
 
 ```python
@@ -1197,8 +615,13 @@ print(latte_model)
         ...
         >
       >
-        
+
 
 ## 3. 扩展阅读
+
+本文介绍如何使用 Mindspore 在 Ascend 910* 上从构建 OpenSora-PKU 中用到的 Latte 文生视频的噪声预测模型，完整版代码可参考 mindone套件[opensora-pku](https://github.com/mindspore-lab/mindone/tree/master/examples/opensora_pku) 里的 Latte 实现: [examples/opensora_pku/opensora/models/diffusion/latte/modeling_latte.py](https://github.com/mindspore-lab/mindone/blob/master/examples/opensora_pku/opensora/models/diffusion/latte/modeling_latte.py)
+
+论文阅读：
+- Latte: [Latent Diffusion Transformer for Video Generation](https://arxiv.org/abs/2401.03048)
 
 

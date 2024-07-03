@@ -27,8 +27,8 @@
     - [x] [Latte 简介与 MindSpore 实现](./aigc/opensora-pku_from_scratch/latte_implemented_from_scratch.md)
     - [x] [Latte 条件嵌入层 MindSpore 实现](./aigc/opensora-pku_from_scratch/latte_embedding_modules_implement.md)
     - [x] [自适应归一化层 MindSpore 实现](./aigc/opensora-pku_from_scratch/latte_adalayernorm_implement.md)
-    - [ ] Latte 注意力模块 MindSpore 实现
-    - [ ] [Latte BasicTransformerBlock MindSpore 实现](./aigc/opensora-pku_from_scratch/latte_transformerblock_implement.md)
+    - [x] [Latte 多头注意力模块的 MindSpore 实现](./aigc/opensora-pku_from_scratch/latte_mha_implement.md)
+    - [x] [Latte BasicTransformerBlock MindSpore 实现](./aigc/opensora-pku_from_scratch/latte_transformerblock_implement.md)
     - diffusion 过程
       - [ ] [diffusion 过程定义]
       - [ ] [loss function 实现]
@@ -48,6 +48,3 @@
 ### API 接口介绍
 
 - [nn.Conv3D 接口实践]
-
-- [LayerNorm 接口实践]
-
