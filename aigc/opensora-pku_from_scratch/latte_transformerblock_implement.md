@@ -39,7 +39,7 @@ OpenSora-PKU 的 latte 主要采用了上述第一种变体，空间、时间特
 
 本文只展示了`norm_type="ada_norm_single"` 以及 `attention_type: str = "default"` 的实现。
 
-## 2.1 spatial transformer block
+### 2.1 spatial transformer block
 
 空间 block : Norm + MultiHeadAttention + Norm + MultiHeadAttention + FeedFoward，其中第一个 MHA 为 self-attention，第二个 MHA 为 cross-attention，文本的 hidden_states 也参与计算。`construct` 的输入`timestep` 通过 adaLN-signle 归一化为模型注入时间戳条件。
 
@@ -203,7 +203,7 @@ class BasicTransformerBlock(nn.Cell):
         return hidden_states
 ```
 
-## 2.2 temporal transformer block
+### 2.2 temporal transformer block
 
 时间 transformer block : Norm + MultiHeadAttention + Norm + FeedFoward。 相比空间 transformer block 少了第二个 MHA， 只用了 self-attention 。
 
@@ -319,7 +319,7 @@ class BasicTransformerBlock_(nn.Cell):
         return hidden_states
 ```
 
-# 3. 扩展阅读
+## 3. 扩展阅读
 
 本文介绍了 Latte 网络中的单个 transformer block 的 MindSpore 实现。
 

@@ -482,7 +482,7 @@ def construct(...):
 
 ```
 
-# 3. 扩展阅读
+## 3. 扩展阅读
 
 本文介绍了注意力机制、多头注意力、自注意力、交叉注意力的概念，以及基于 Mindspore 在 Ascend 910* 上实现 Latte 网络 transformer block 使用的多头注意力模块（MHA）。本文的代码只展示了基本的 MHA 操作，opensora-pku / latte 的 MHA 实现还支持 Flash Attention、旋转位置编码以及 pixart-simga 提出的 KV-compression 效率提升方法，完整版代码可参考 mindone套件 [opensora-pku](https://github.com/mindspore-lab/mindone/tree/master/examples/opensora_pku):
 

@@ -40,7 +40,7 @@ LatteT2V 网络的整体代码结构如下，默认配置下归一化层使用 a
     * MultiHeadAttention  ✔️
     * FeedForward  ✔️
 
-## 2. LatteT2V block 构建
+## 2. LatteT2VBlock 构建
 
 
 OpenSora-PKU 的 latte 采用了论文中的第一种变体设计：空间、时间特征分别由单一的 transformer block 处理，空间 transformer block 与时间 transformer block 交替进行，组成一个 `LatteT2VBlock`。
@@ -617,7 +617,7 @@ print(latte_model)
       >
 
 
-## 3. 扩展阅读
+## 4. 扩展阅读
 
 本文介绍如何使用 Mindspore 在 Ascend 910* 上从构建 OpenSora-PKU 中用到的 Latte 文生视频的噪声预测模型，完整版代码可参考 mindone套件[opensora-pku](https://github.com/mindspore-lab/mindone/tree/master/examples/opensora_pku) 里的 Latte 实现: [examples/opensora_pku/opensora/models/diffusion/latte/modeling_latte.py](https://github.com/mindspore-lab/mindone/blob/master/examples/opensora_pku/opensora/models/diffusion/latte/modeling_latte.py)
 
