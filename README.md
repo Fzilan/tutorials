@@ -2,6 +2,11 @@
 
 ### AIGC/文生图
 
+- 文生图数据集构建
+    - [x] [MindSpore 文生图训练数据集构造](./aigc/sdxl_implemented_from_scratch/create_text2image_datasets.md)
+    - [ ] [MindSpore 文生图 dreambooth 微调数据集构造]
+    - [ ] [基于 huggingface `datasets` 库构造 MindSpore 数据集]
+
 - [ ] [SDXL 从零到一实现]
     - [ ] [SDXL - VAE模块构建]
     - [ ] [SDXL - Conditioner块构建]
